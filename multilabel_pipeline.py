@@ -2,6 +2,7 @@ from typing import Union, Optional
 
 import numpy as np
 from transformers.pipelines import ArgumentHandler
+from transformers import PreTrainedModel, TFPreTrainedModel
 from transformers import (
     Pipeline,
     PreTrainedTokenizer,
@@ -12,7 +13,7 @@ from transformers import (
 class MultiLabelPipeline(Pipeline):
     def __init__(
             self,
-            model: Union["PreTrainedModel", "TFPreTrainedModel"],
+            model: Union[PreTrainedModel, TFPreTrainedModel],
             tokenizer: PreTrainedTokenizer,
             modelcard: Optional[ModelCard] = None,
             framework: Optional[str] = None,

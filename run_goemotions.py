@@ -17,15 +17,15 @@ from transformers import (
     get_linear_schedule_with_warmup
 )
 
-from model import BertForMultiLabelClassification
+from models import BERT
 from utils import (
     init_logger,
     set_seed,
     compute_metrics
 )
-from data_loader import (
+from datasets import (
     load_and_cache_examples,
-    GoEmotionsProcessor
+    GoEmotions
 )
 
 logger = logging.getLogger(__name__)
@@ -221,7 +221,7 @@ def main(cli_args):
     init_logger()
     set_seed(args)
 
-    processor = GoEmotionsProcessor(args)
+    processor = GoEmotions(args)
     label_list = processor.get_labels()
 
     config = BertConfig.from_pretrained(
@@ -234,7 +234,7 @@ def main(cli_args):
     tokenizer = BertTokenizer.from_pretrained(
         args.tokenizer_name_or_path,
     )
-    model = BertForMultiLabelClassification.from_pretrained(
+    model = BERT.from_pretrained(
         args.model_name_or_path,
         config=config
     )
@@ -268,7 +268,7 @@ def main(cli_args):
         logger.info("Evaluate the following checkpoints: %s", checkpoints)
         for checkpoint in checkpoints:
             global_step = checkpoint.split("-")[-1]
-            model = BertForMultiLabelClassification.from_pretrained(checkpoint)
+            model = BERT.from_pretrained(checkpoint)
             model.to(args.device)
             result = evaluate(args, model, test_dataset, mode="test", global_step=global_step)
             result = dict((k + "_{}".format(global_step), v) for k, v in result.items())
