@@ -52,6 +52,7 @@ class GoEmotions(Dataset):
         data = pd.read_csv(os.path.join(self.data_dir, filename), delimiter='\t').values
         sentences, labels = data[:, 0], data[:, 1]
 
+        sentences =
 
         labels = np.char.split(labels.astype(str), sep=',')
         labels = utils.list_to_2darray(labels).astype(np.int32)

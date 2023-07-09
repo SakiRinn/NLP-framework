@@ -27,14 +27,12 @@ def pad_and_truncate(sequences, max_length, padding='post', truncating='post'):
         raise NotImplementedError
     return x
 
-
 def list_to_2darray(lst):
     max_length = max(len(sublst) for sublst in lst)
     result = np.zeros((len(lst), max_length))
     for i, row in enumerate(lst):
         result[i, :len(row)] = row
     return result
-
 
 def onehot_encoding(array):
     types = np.unique(array)

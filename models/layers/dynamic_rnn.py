@@ -1,9 +1,3 @@
-# -*- coding: utf-8 -*-
-# file: dynamic_rnn.py
-# author: songyouwei <youwei0314@gmail.com>
-# Copyright (C) 2018. All Rights Reserved.
-
-
 import torch
 import torch.nn as nn
 import numpy as np
@@ -33,11 +27,11 @@ class DynamicLSTM(nn.Module):
         self.bidirectional = bidirectional
         self.only_use_last_hidden_state = only_use_last_hidden_state
         self.rnn_type = rnn_type
-        
-        if self.rnn_type == 'LSTM': 
+
+        if self.rnn_type == 'LSTM':
             self.RNN = nn.LSTM(
                 input_size=input_size, hidden_size=hidden_size, num_layers=num_layers,
-                bias=bias, batch_first=batch_first, dropout=dropout, bidirectional=bidirectional)  
+                bias=bias, batch_first=batch_first, dropout=dropout, bidirectional=bidirectional)
         elif self.rnn_type == 'GRU':
             self.RNN = nn.GRU(
                 input_size=input_size, hidden_size=hidden_size, num_layers=num_layers,
@@ -46,7 +40,7 @@ class DynamicLSTM(nn.Module):
             self.RNN = nn.RNN(
                 input_size=input_size, hidden_size=hidden_size, num_layers=num_layers,
                 bias=bias, batch_first=batch_first, dropout=dropout, bidirectional=bidirectional)
-        
+
 
     def forward(self, x, x_len):
         """
@@ -63,11 +57,11 @@ class DynamicLSTM(nn.Module):
         x = x[x_sort_idx]
         """pack"""
         x_emb_p = torch.nn.utils.rnn.pack_padded_sequence(x, x_len, batch_first=self.batch_first)
-        
+
         # process using the selected RNN
-        if self.rnn_type == 'LSTM': 
+        if self.rnn_type == 'LSTM':
             out_pack, (ht, ct) = self.RNN(x_emb_p, None)
-        else: 
+        else:
             out_pack, ht = self.RNN(x_emb_p, None)
             ct = None
         """unsort: h"""
