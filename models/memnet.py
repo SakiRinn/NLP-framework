@@ -3,15 +3,15 @@
 # author: songyouwei <youwei0314@gmail.com>
 # Copyright (C) 2018. All Rights Reserved.
 
-from layers.attention import Attention
+from .layers.attention import Attention
 import torch
 import torch.nn as nn
 
-from layers.squeeze_embedding import SqueezeEmbedding
+from .layers.squeeze_embedding import SqueezeEmbedding
 
 
 class MemNet(nn.Module):
-    
+
     def locationed_memory(self, memory, memory_len):
         # here we just simply calculate the location vector in Model2's manner
         batch_size = memory.shape[0]

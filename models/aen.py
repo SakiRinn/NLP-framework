@@ -3,10 +3,10 @@
 # author: songyouwei <youwei0314@gmail.com>
 # Copyright (C) 2018. All Rights Reserved.
 
-from layers.dynamic_rnn import DynamicLSTM
-from layers.squeeze_embedding import SqueezeEmbedding
-from layers.attention import Attention, NoQueryAttention
-from layers.point_wise_feed_forward import PositionwiseFeedForward
+from .layers.dynamic_rnn import DynamicLSTM
+from .layers.squeeze_embedding import SqueezeEmbedding
+from .layers.attention import Attention, NoQueryAttention
+from .layers.point_wise_feed_forward import PositionwiseFeedForward
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

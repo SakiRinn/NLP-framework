@@ -3,8 +3,8 @@
 # author: songyouwei <youwei0314@gmail.com>
 # Copyright (C) 2018. All Rights Reserved.
 
-from layers.dynamic_rnn import DynamicLSTM
-from layers.attention import Attention
+from .layers.dynamic_rnn import DynamicLSTM
+from .layers.attention import Attention
 import torch
 import torch.nn as nn
 

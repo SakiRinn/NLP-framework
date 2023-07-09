@@ -2,12 +2,12 @@
 # file: atae-lstm
 # author: songyouwei <youwei0314@gmail.com>
 # Copyright (C) 2018. All Rights Reserved.
-from layers.attention import Attention, NoQueryAttention
-from layers.dynamic_rnn import DynamicLSTM
+from .layers.attention import Attention, NoQueryAttention
+from .layers.dynamic_rnn import DynamicLSTM
 import torch
 import torch.nn as nn
 
-from layers.squeeze_embedding import SqueezeEmbedding
+from .layers.squeeze_embedding import SqueezeEmbedding
 
 
 class LSTM_ATAE(nn.Module):

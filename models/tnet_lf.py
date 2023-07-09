@@ -3,7 +3,7 @@ import torch.nn as nn
 
 import torch.nn.functional as F
 import numpy
-from layers.dynamic_rnn import DynamicLSTM
+from .layers.dynamic_rnn import DynamicLSTM
 
 
 class Absolute_Position_Embedding(nn.Module):

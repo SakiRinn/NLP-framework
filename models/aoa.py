@@ -3,7 +3,7 @@
 # author: gene_zc <gene_zhangchen@163.com>
 # Copyright (C) 2018. All Rights Reserved.
 
-from layers.dynamic_rnn import DynamicLSTM
+from .layers.dynamic_rnn import DynamicLSTM
 import math
 import torch
 import torch.nn as nn

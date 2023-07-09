@@ -3,7 +3,7 @@
 # author: songyouwei <youwei0314@gmail.com>
 # Copyright (C) 2018. All Rights Reserved.
 
-from layers.dynamic_rnn import DynamicLSTM
+from .layers.dynamic_rnn import DynamicLSTM
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -55,7 +55,7 @@ class RAM(nn.Module):
         memory = self.embed(text_raw_indices)
         memory, (_, _) = self.bi_lstm_context(memory, memory_len)
         memory = self.locationed_memory(memory, memory_len, left_len, aspect_len)
-        
+
         aspect = self.embed(aspect_indices)
         aspect = torch.sum(aspect, dim=1)
         aspect = torch.div(aspect, nonzeros_aspect.unsqueeze(-1))
@@ -64,12 +64,12 @@ class RAM(nn.Module):
         batch_size = memory.size(0)
         seq_len = memory.size(1)
         for _ in range(self.opt.hops):
-            g = self.att_linear(torch.cat([memory, 
-                torch.zeros(batch_size, seq_len, self.opt.embed_dim).to(self.opt.device) + et.unsqueeze(1), 
-                torch.zeros(batch_size, seq_len, self.opt.embed_dim).to(self.opt.device) + aspect.unsqueeze(1)], 
+            g = self.att_linear(torch.cat([memory,
+                torch.zeros(batch_size, seq_len, self.opt.embed_dim).to(self.opt.device) + et.unsqueeze(1),
+                torch.zeros(batch_size, seq_len, self.opt.embed_dim).to(self.opt.device) + aspect.unsqueeze(1)],
                 dim=-1))
             alpha = F.softmax(g, dim=1)
-            i = torch.bmm(alpha.transpose(1, 2), memory).squeeze(1)  
+            i = torch.bmm(alpha.transpose(1, 2), memory).squeeze(1)
             et = self.gru_cell(i, et)
         out = self.dense(et)
         return out
