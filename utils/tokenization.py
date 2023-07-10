@@ -150,6 +150,7 @@ def printable_text(text):
 def load_vocab(vocab_file):
     """Loads a vocabulary file into a dictionary."""
     vocab = collections.OrderedDict()
+    vocab['[PAD]'] = 0
     with open(vocab_file, "r", encoding="utf-8") as reader:
         while True:
             token = convert_to_unicode(reader.readline())
@@ -213,6 +214,10 @@ class FullTokenizer(object):
 
     def convert_ids_to_tokens(self, ids):
         return convert_by_vocab(self.inv_vocab, ids)
+
+    def convert_tokens_to_string(self, tokens):
+        out_string = " ".join(tokens).replace(" ##", "").strip()
+        return out_string
 
 
 class BasicTokenizer(object):

@@ -20,5 +20,7 @@
     "pretrained_model": "pretrained/bert-base-cased",
     "pretrained_tokenizer": "pretrained/goemotions-tokenizer",
     "taxonomy": "original",
-    "threshold": 0.3
+    "threshold": 0.3,
+    "device": null,
+    "resume_dir": ""
 }

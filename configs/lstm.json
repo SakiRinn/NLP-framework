@@ -20,5 +20,7 @@
     "pretrained_model": "",
     "pretrained_tokenizer": "",
     "taxonomy": "original",
-    "threshold": 0.3
+    "threshold": 0.3,
+    "device": null,
+    "resume_dir": ""
 }

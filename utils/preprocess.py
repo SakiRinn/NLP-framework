@@ -2,13 +2,13 @@ import os
 import numpy as np
 
 
-def indices_to_array(labels, max_seq_len=0):
+def indices_to_array(labels, max_seq_len=0, pad=0):
     if max_seq_len <= 0:
         max_seq_len = max(len(lst) for lst in labels)
-    result = np.zeros((len(labels), max_seq_len), dtype=np.int32)
+    result = np.full((len(labels), max_seq_len), pad, dtype=np.int32)
     for i, lst in enumerate(labels):
         length = min(len(lst), max_seq_len)
-        result[i, :length] = np.int32(lst[:length]) + 1
+        result[i, :length] = np.int32(lst[:length])
     return result
 
 

@@ -75,6 +75,6 @@ class GoEmotions(BaseDataset):
         indices = utils.indices_to_array(indices, self.max_seq_len)
 
         labels = np.char.split(labels.astype(str), sep=',')
-        labels = utils.indices_to_array(labels)
+        labels = utils.indices_to_array(labels, pad=-1) + 1
         one_hots = utils.onehot_encoding(labels)
         return indices, one_hots

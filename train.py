@@ -9,7 +9,7 @@ import numpy as np
 
 import torch
 from attrdict import AttrDict
-from torch.utils.data.dataloader import DataLoader
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from tqdm import tqdm, trange
 from transformers import BertModel, BertTokenizer, get_linear_schedule_with_warmup
 from datasets.goemotions import GoEmotions
@@ -32,9 +32,14 @@ class Runner:
         self.opt.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') \
             if self.opt.device is None else torch.device(self.opt.device)
 
-        self.train_loader = self.prepare_loader(mode='train')
-        self.val_loader = self.prepare_loader(mode='val')
-        self.test_loader = self.prepare_loader(mode='test')
+        if 'bert-base-cased-goemotions' in self.opt.pretrained_tokenizer:
+            self.train_loader = self.prepare_pretrained_goemotions(mode='train')
+            self.val_loader = self.prepare_pretrained_goemotions(mode='val')
+            self.test_loader = self.prepare_pretrained_goemotions(mode='test')
+        else:
+            self.train_loader = self.prepare_loader(mode='train')
+            self.val_loader = self.prepare_loader(mode='val')
+            self.test_loader = self.prepare_loader(mode='test')
 
         self.model = self.prepare_model()
         self.optimizer, self.scheduler = self.prepare_optimizer()
@@ -87,7 +92,7 @@ class Runner:
         parser.add_argument('--lr', default=5e-5, type=float,
                             help='try 5e-5, 2e-5 for BERT, 1e-3 for others')
         parser.add_argument('--dropout', default=0.1, type=float)
-        parser.add_argument('--l2-reg', default=0.01, type=float)
+        parser.add_argument('--l2-reg', default=0.0, type=float)
         parser.add_argument('--max-grad-norm', default=1.0, type=float)
         parser.add_argument('--warmup-proportion', default=0.1, type=float)
 
@@ -104,10 +109,8 @@ class Runner:
         parser.add_argument('--hidden-size', default=768, type=int,
                             help='If using pretrained bert, it must be 768')
         parser.add_argument('--max-seq-len', default=50, type=int)
-        parser.add_argument('--pretrained-model',
-                            default='pretrained/bert-base-cased', type=str)
-        parser.add_argument('--pretrained-tokenizer',
-                            default='pretrained/goemotions-tokenizer', type=str)
+        parser.add_argument('--pretrained-model', default='', type=str)
+        parser.add_argument('--pretrained-tokenizer', default='', type=str)
 
         # dataset == Goemotions
         parser.add_argument("--taxonomy", default='original', choices=['original', 'ekman', 'group'],
@@ -154,8 +157,17 @@ class Runner:
         dataset = self.opt.dataset(self.opt.data_dir, tokenizer=self.tokenizer, mode=mode)
         return DataLoader(dataset, batch_size=self.opt.batch_size, shuffle=(mode == 'train'))
 
+    def prepare_pretrained_goemotions(self, mode='train'):
+        if isinstance(self.opt.dataset, str):
+            self.opt.dataset = utils.get_datasets()[self.opt.dataset]
+            self.labels = self.opt.dataset.get_labels(self.opt.data_dir)
+            self.tokenizer = BertTokenizer.from_pretrained(self.opt.pretrained_tokenizer)
+        dataset = utils.load_and_cache_examples(self.opt, self.tokenizer, mode=mode)
+        sampler = RandomSampler(dataset) if mode == 'train' else SequentialSampler(dataset)
+        return DataLoader(dataset, sampler=sampler, batch_size=self.opt.batch_size)
+
     def prepare_model(self):
-        self.opt.vocab_len = len(self.tokenizer)
+        self.opt.vocab_len = len(self.tokenizer.vocab) + 1
         self.opt.num_labels = len(self.labels)
         self.opt.model = utils.get_models()[self.opt.model]
         pretrain = None
@@ -213,21 +225,26 @@ class Runner:
             self.logger.info(f'Epoch: {epoch}')
             self.model.train()
 
-            for batch, gt in tqdm(train_loader, desc="Iteration"):
+            for batch in tqdm(train_loader, desc="Iteration"):
                 global_step += 1
-                self.optimizer.zero_grad()
 
-                inputs = {k: v.to(self.opt.device) \
-                          for k, v in self.opt.dataset.input_packets(batch).items()}
-                del inputs['input']
-                batch, gt = batch.to(self.opt.device), gt.to(self.opt.device)
-                outputs = self.model(batch, gt, **inputs)
+                batch = tuple(t.to(self.opt.device) for t in batch)
+                if len(batch) == 4:
+                    inputs = {
+                    "attention_mask": batch[1],
+                    "token_type_ids": batch[2],
+                    }
+                else:
+                    inputs = {}
+                x, gt = batch[0].to(self.opt.device), batch[-1].to(self.opt.device)
+                outputs = self.model(x, gt, **inputs)
                 pred, loss = outputs[0], outputs[-1]
                 loss.backward()
 
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.opt.max_grad_norm)
                 self.optimizer.step()
                 self.scheduler.step()
+                self.model.zero_grad()
 
                 global_step += 1
                 total_loss += loss.item()
@@ -244,6 +261,7 @@ class Runner:
                 max_val_acc = val_acc
                 max_val_epoch = epoch
                 self.save(info=f'{epoch+1}e_{val_acc*100:.2f}acc')
+                path = os.path.join(self.dirname, f'model_{epoch+1}e_{val_acc*100:.2f}acc.pt')
             if val_f1 > max_val_f1:
                 max_val_f1 = val_f1
             if epoch - max_val_epoch >= self.opt.patience:
@@ -257,40 +275,58 @@ class Runner:
             result_lst = []
             total_num = 0
         total_loss, global_step = 0, 0
+        preds, gts = None, None
+
         self.model.eval()
 
         self.logger.info('Evaluating...')
         with torch.no_grad():
-            for batch, gt in test_loader:
-                inputs = {k: v.to(self.opt.device) \
-                              for k, v in self.opt.dataset.input_packets(batch).items()}
-                del inputs['input']
-                batch, gt = batch.to(self.opt.device), gt.to(self.opt.device)
-                outputs = self.model(batch, gt, **inputs)
+            for batch in test_loader:
+
+                batch = tuple(t.to(self.opt.device) for t in batch)
+                if len(batch) == 4:
+                    inputs = {
+                    "attention_mask": batch[1],
+                    "token_type_ids": batch[2],
+                    }
+                else:
+                    inputs = {}
+                x, gt = batch[0].to(self.opt.device), batch[-1].to(self.opt.device)
+                outputs = self.model(x, gt, **inputs)
                 pred, loss = outputs[0], outputs[-1]
 
                 if self.opt.dataset == GoEmotions:
                     pred = torch.sigmoid(pred)
                 else:
                     pred = torch.softmax(pred, dim=-1)
-                bi_pred = torch.where(pred > self.opt.threshold, 1, 0)
+                bi_pred = torch.where(pred > self.opt.threshold, 1, 0).detach().cpu().numpy()
 
                 if result_filename is not None:
                     label_lst = self.opt.dataset.get_labels(self.opt.data_dir)
-                    for i in range(len(batch)):
+                    for i in range(len(x)):
                         total_num += 1
+                        mask = np.nonzero(bi_pred[i])[0] if len(np.nonzero(bi_pred[i])) != 0 else np.array([])
                         result_lst.append({
                             'number': total_num,
-                            'text': utils.array_to_text(self.tokenizer, batch[i]),
+                            'text': utils.array_to_text(self.tokenizer, x[i]),
                             'predictions': [label_lst[idx] for idx in np.nonzero(bi_pred[i])[0]],
                             'scores': pred[i][np.nonzero(bi_pred[i])[0]].tolist(),
                             'gts': [label_lst[idx] for idx in np.nonzero(gt[i])[0]]
                         })
 
+                if preds is None or gts is None:
+                    preds = pred.detach().cpu().numpy()
+                    gts = gt.detach().cpu().numpy()
+                else:
+                    preds = np.append(preds, pred.detach().cpu().numpy(), axis=0)
+                    gts = np.append(gts, gt.detach().cpu().numpy(), axis=0)
+
                 total_loss += loss
                 global_step += 1
-                results = {"loss": total_loss / global_step}
-                results.update(utils.compute_metrics(bi_pred.cpu(), gt.cpu()))
+
+            results = {"loss": total_loss / global_step}
+            bi_preds = np.where(preds > self.opt.threshold, 1, 0)
+            results.update(utils.compute_metrics(bi_preds, gts))
 
         if result_filename is not None:
             with open(os.path.join(self.dirname, f'{result_filename}.json'), 'w') as f:
@@ -306,5 +342,5 @@ class Runner:
 
 
 if __name__ == '__main__':
-    trainer = Runner(config=None)
+    trainer = Runner(config='configs/lstm.json')
     trainer.run()
