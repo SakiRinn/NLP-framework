@@ -5,9 +5,9 @@ from .base import BaseModel
 from .layers.dynamic_rnn import DynamicLSTM
 
 
-class LSTM(nn.Module):
-    def __init__(self, opt, loss, embedding=None):
-        super(LSTM, self).__init__()
+class LSTM(BaseModel):
+    def __init__(self, opt, loss=nn.BCEWithLogitsLoss(), embedding=None):
+        super(LSTM, self).__init__(opt, loss)
         if embedding is not None:
             self.embed = nn.Embedding.from_pretrained(torch.tensor(embedding, dtype=torch.float))
         else:
