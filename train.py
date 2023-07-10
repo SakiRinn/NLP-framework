@@ -1,81 +1,113 @@
-# -*- coding: utf-8 -*-
-# file: train.py
-# author: songyouwei <youwei0314@gmail.com>
-# Copyright (C) 2018. All Rights Reserved.
-
-import logging
 import argparse
+import json
 import math
 import os
-import sys
-import random
-import numpy
-
+import re
 from sklearn import metrics
-from time import strftime, localtime
-
-from transformers import BertModel
 
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, random_split
+from attrdict import AttrDict
+from torch.utils.data.dataloader import DataLoader
+from tqdm import tqdm, trange
+from transformers import BertModel, get_linear_schedule_with_warmup
+from datasets.goemotions import GoEmotions
 
+import models
 import utils
-from utils import build_tokenizer, build_embedding_matrix, Tokenizer4Bert, ABSADataset
-
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-logger.addHandler(logging.StreamHandler(sys.stdout))
 
 
-class Instructor:
-    def __init__(self, opt):
-        self.opt = opt
+class Trainer:
 
-        if 'bert' in opt.model_name:
-            tokenizer = Tokenizer4Bert(opt.max_seq_len, opt.pretrained_bert_name)
-            bert = BertModel.from_pretrained(opt.pretrained_bert_name)
-            self.model = opt.model_class(bert, opt).to(opt.device)
+    def __init__(self, config=None):
+        if config is not None:
+            with open(config) as f:
+                self.opt = AttrDict(json.load(f))
         else:
-            tokenizer = build_tokenizer(
-                fnames=[opt.dataset_file['train'], opt.dataset_file['test']],
-                max_seq_len=opt.max_seq_len,
-                dat_fname='{0}_tokenizer.dat'.format(opt.dataset))
-            embedding_matrix = build_embedding_matrix(
-                word2idx=tokenizer.word2idx,
-                embed_dim=opt.embed_dim,
-                dat_fname='{0}_{1}_embedding_matrix.dat'.format(str(opt.embed_dim), opt.dataset))
-            self.model = opt.model_class(embedding_matrix, opt).to(opt.device)
+            self.opt = self.init_args()
 
-        self.trainset = ABSADataset(opt.dataset_file['train'], tokenizer)
-        self.testset = ABSADataset(opt.dataset_file['test'], tokenizer)
-        assert 0 <= opt.valset_ratio < 1
-        if opt.valset_ratio > 0:
-            valset_len = int(len(self.trainset) * opt.valset_ratio)
-            self.trainset, self.valset = random_split(self.trainset, (len(self.trainset)-valset_len, valset_len))
-        else:
-            self.valset = self.testset
+        self.logger, self.dirname = utils.set_logger(self.opt, 'train')
+        self.print_args()
+        self.opt.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') \
+            if self.opt.device is None else torch.device(self.opt.device)
 
-        if opt.device.type == 'cuda':
-            logger.info('cuda memory allocated: {}'.format(torch.cuda.memory_allocated(device=opt.device.index)))
-        self._print_args()
+        self.train_loader = self.prepare_loader(mode='train')
+        self.val_loader = self.prepare_loader(mode='val')
+        self.test_loader = self.prepare_loader(mode='test')
 
-    def _print_args(self):
-        n_trainable_params, n_nontrainable_params = 0, 0
-        for p in self.model.parameters():
-            n_params = torch.prod(torch.tensor(p.shape))
-            if p.requires_grad:
-                n_trainable_params += n_params
-            else:
-                n_nontrainable_params += n_params
-        logger.info('> n_trainable_params: {0}, n_nontrainable_params: {1}'.format(n_trainable_params, n_nontrainable_params))
-        logger.info('> training arguments:')
+        self.model = self.prepare_model()
+        self.optimizer, self.scheduler = self.prepare_optimizer()
+
+        self.opt.initializer = utils.get_initializers()[self.opt.initializer]
+        self.init_params()
+        self.print_params()
+
+        if self.opt.resume_dir != '':
+            self.load(self.opt.resume_dir)
+
+        if self.opt.device.type == 'cuda':
+            self.logger.info(
+                f'Cuda memory allocated: {torch.cuda.memory_allocated(device=self.opt.device.index)}')
+
+    @staticmethod
+    def init_args():
+        parser = argparse.ArgumentParser()
+
+        # Base
+        parser.add_argument('dataset', choices=utils.get_datasets().keys(), type=str)
+        parser.add_argument("data_dir", type=str,
+                            help='The directory of dataset file')
+        parser.add_argument("--resume-dir", type=str,
+                            default='', help="The folder you'll resume")
+        parser.add_argument('--model', default='bert',
+                            choices=utils.get_models().keys(), type=str)
+        parser.add_argument('--optimizer', default='adamW',
+                            choices=utils.get_optimizers().keys(), type=str)
+        parser.add_argument('--initializer', default='xavier_uniform',
+                            choices=utils.get_initializers().keys(), type=str)
+
+        # Train
+        parser.add_argument('--epoch', default=10, type=int,
+                            help='Try larger number for non-BERT models')
+        parser.add_argument('--batch-size', default=64,
+                            type=int, help='Try 16, 32, 64 for BERT models')
+        parser.add_argument('--lr', default=5e-5, type=float,
+                            help='try 5e-5, 2e-5 for BERT, 1e-3 for others')
+        parser.add_argument('--dropout', default=0.1, type=float)
+        parser.add_argument('--l2-reg', default=0.01, type=float)
+        parser.add_argument('--max-grad-norm', default=1.0, type=float)
+        parser.add_argument('--warmup-proportion', default=0.1, type=float)
+
+        # Misc
+        parser.add_argument('--device', default=None,
+                            type=str, help='e.g. cuda:0')
+        parser.add_argument('--seed', default=114514, type=int,
+                            help='set seed for reproducibility')
+        parser.add_argument('--log-step', default=25, type=int)
+        parser.add_argument('--patience', default=5, type=int)
+
+        # Model
+        parser.add_argument('--embed-size', default=256, type=int)
+        parser.add_argument('--hidden-size', default=768, type=int,
+                            help='If using pretrained bert, it must be 768')
+        parser.add_argument('--max-seq-len', default=50, type=int)
+        parser.add_argument('--pretrained-bert-name',
+                            default='bert-base-uncased', type=str)
+
+        # dataset == Goemotions
+        parser.add_argument("--taxonomy", default='original', choices=['original', 'ekman', 'group'],
+                            type=str, help="Taxonomy (original, ekman, group)")
+        parser.add_argument("--threshold", default=0.3, type=float)
+
+        return parser.parse_args()
+
+    def print_args(self):
+        self.logger.info('Training arguments:')
         for arg in vars(self.opt):
-            logger.info('>>> {0}: {1}'.format(arg, getattr(self.opt, arg)))
+            self.logger.info(f'>  {arg}: {getattr(self.opt, arg)}')
 
-    def _reset_params(self):
+    def init_params(self):
         for child in self.model.children():
-            if type(child) != BertModel:  # skip bert params
+            if isinstance(child, BertModel) or 'Loss' in child.__class__.__name__:
                 for p in child.parameters():
                     if p.requires_grad:
                         if len(p.shape) > 1:
@@ -84,185 +116,165 @@ class Instructor:
                             stdv = 1. / math.sqrt(p.shape[0])
                             torch.nn.init.uniform_(p, a=-stdv, b=stdv)
 
-    def _train(self, criterion, optimizer, train_data_loader, val_data_loader):
-        max_val_acc = 0
-        max_val_f1 = 0
-        max_val_epoch = 0
-        global_step = 0
+    def print_params(self):
+        n_trainable_params, n_nontrainable_params = 0, 0
+        for p in self.model.parameters():
+            n_params = torch.prod(torch.tensor(p.shape))
+            if p.requires_grad:
+                n_trainable_params += n_params
+            else:
+                n_nontrainable_params += n_params
+        self.logger.info(f'Trainable parameters: {n_trainable_params}')
+        self.logger.info(f'Non-trainable parameters: {n_nontrainable_params}')
+
+    def prepare_loader(self, mode='all'):
+        if isinstance(self.opt.dataset, str):
+            self.opt.dataset = utils.get_datasets()[self.opt.dataset]
+            self.dataset = self.opt.dataset(self.opt.data_dir, mode='all')
+        dataset = self.opt.dataset(self.opt.data_dir, mode=mode)
+        return DataLoader(dataset, batch_size=self.opt.batch_size, shuffle=(mode == 'train'))
+
+    def prepare_model(self):
+        self.opt.vocab_len = len(self.dataset.tokenizer.vocab)
+        self.opt.num_labels = len(self.dataset.labels)
+        self.opt.model = utils.get_models()[self.opt.model]
+        pretrain = None
+        if isinstance(self.opt.model, models.BERT):
+            pretrain = BertModel.from_pretrained(self.opt.pretrained_bert_name)
+        elif isinstance(self.opt.model, models.LSTM):
+            pretrain = None     # TODO
+        return self.opt.model(self.opt, pretrain).to(self.opt.device)
+
+    def prepare_optimizer(self):
+        self.opt.step = len(self.train_loader) * self.opt.epoch
+        _params = filter(lambda p: p.requires_grad, self.model.parameters())
+        self.opt.optimizer = utils.get_optimizers()[self.opt.optimizer]
+        optimizer = self.opt.optimizer(
+            _params, lr=self.opt.lr, weight_decay=self.opt.l2_reg)
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=int(
+                self.opt.step * self.opt.warmup_proportion),
+            num_training_steps=self.opt.step)
+        return optimizer, scheduler
+
+    def load(self, resume_dir):
+        epochs = []
+        model_name = ''
+        for filename in os.listdir(resume_dir):
+            match = re.match(r'^model_(\d+)_', filename)
+            if match:
+                epoch = int(match[1])
+                if epoch > max(epochs):
+                    model_name = filename
+                epochs.append(epoch)
+        self.model.load_state_dict(torch.load(
+            os.path.join(resume_dir, model_name)))
+        self.optimizer.load_state_dict(torch.load(
+            os.path.join(resume_dir, "optimizer.pt")))
+        self.scheduler.load_state_dict(torch.load(
+            os.path.join(resume_dir, "scheduler.pt")))
+
+    def save(self, info='save'):
+        torch.save(
+            self.model.state_dict(),
+            os.path.join(self.dirname, f'model_{info}.pt'),
+        )
+        torch.save(
+            self.optimizer.state_dict(),
+            os.path.join(self.dirname, f'optimizer.pt'),
+        )
+        torch.save(
+            self.scheduler.state_dict(),
+            os.path.join(self.dirname, f'scheduler.pt'),
+        )
+        self.logger.info(f'Save new checkpoints.')
+
+    def train(self, train_loader, val_loader):
+        max_val_acc, max_val_f1 = 0, 0
+        max_val_epoch, global_step = 0, 0
         path = None
-        for i_epoch in range(self.opt.num_epoch):
-            logger.info('>' * 100)
-            logger.info('epoch: {}'.format(i_epoch))
+
+        for epoch in trange(self.opt.epoch, desc="Epoch"):
+            self.logger.info(f'Epoch: {epoch}')
             n_correct, n_total, loss_total = 0, 0, 0
-            # switch model to training mode
             self.model.train()
-            for i_batch, batch in enumerate(train_data_loader):
+
+            for batch, gt in tqdm(train_loader, desc="Iteration"):
                 global_step += 1
-                # clear gradient accumulators
-                optimizer.zero_grad()
+                self.optimizer.zero_grad()
 
-                inputs = [batch[col].to(self.opt.device) for col in self.opt.inputs_cols]
-                outputs = self.model(inputs)
-                targets = batch['polarity'].to(self.opt.device)
-
-                loss = criterion(outputs, targets)
+                inputs = {k: v.to(self.opt.device) \
+                          for k, v in self.opt.dataset.input_packets(batch).items()}
+                del inputs['input']
+                batch, gt = batch.to(self.opt.device), gt.to(self.opt.device)
+                outputs = self.model(batch, gt, **inputs)
+                loss = outputs[-1]
                 loss.backward()
-                optimizer.step()
 
-                n_correct += (torch.argmax(outputs, -1) == targets).sum().item()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.opt.max_grad_norm)
+                self.optimizer.step()
+                self.scheduler.step()
+
+                n_correct += (torch.argmax(outputs, -1) == gt).sum().item()
                 n_total += len(outputs)
                 loss_total += loss.item() * len(outputs)
                 if global_step % self.opt.log_step == 0:
                     train_acc = n_correct / n_total
                     train_loss = loss_total / n_total
-                    logger.info('loss: {:.4f}, acc: {:.4f}'.format(train_loss, train_acc))
+                    self.logger.info(
+                        '>  loss: {:.4f}, acc: {:.4f}'.format(train_loss, train_acc))
 
-            val_acc, val_f1 = self._evaluate_acc_f1(val_data_loader)
-            logger.info('> val_acc: {:.4f}, val_f1: {:.4f}'.format(val_acc, val_f1))
+            val_acc, val_f1 = self.evaluate(val_loader)
+            self.logger.info(
+                '>> val_acc: {:.4f}, val_f1: {:.4f}'.format(val_acc, val_f1))
             if val_acc > max_val_acc:
                 max_val_acc = val_acc
-                max_val_epoch = i_epoch
-                if not os.path.exists('state_dict'):
-                    os.mkdir('state_dict')
-                path = 'state_dict/{0}_{1}_val_acc_{2}'.format(self.opt.model_name, self.opt.dataset, round(val_acc, 4))
-                torch.save(self.model.state_dict(), path)
-                logger.info('>> saved: {}'.format(path))
+                max_val_epoch = epoch
+                self.save(info=f'{epoch}e_{val_acc:.4f}acc')
             if val_f1 > max_val_f1:
                 max_val_f1 = val_f1
-            if i_epoch - max_val_epoch >= self.opt.patience:
-                print('>> early stop.')
+            if epoch - max_val_epoch >= self.opt.patience:
+                self.logger.info('Early stop!')
                 break
 
         return path
 
-    def _evaluate_acc_f1(self, data_loader):
-        n_correct, n_total = 0, 0
-        t_targets_all, t_outputs_all = None, None
-        # switch model to evaluation mode
+    def evaluate(self, val_loader):
+        total_loss, global_step = 0, 0
         self.model.eval()
+
+        self.logger.info('Evaluating...')
         with torch.no_grad():
-            for i_batch, t_batch in enumerate(data_loader):
-                t_inputs = [t_batch[col].to(self.opt.device) for col in self.opt.inputs_cols]
-                t_targets = t_batch['polarity'].to(self.opt.device)
-                t_outputs = self.model(t_inputs)
+            for i, (batch, gt) in enumerate(val_loader):
+                inputs = {k: v.to(self.opt.device) \
+                          for k, v in self.opt.dataset.input_packets(batch)}
+                del inputs['input']
+                outputs = self.model(batch, gt, **inputs)
+                pred = outputs[0]
+                loss = outputs[-1]
 
-                n_correct += (torch.argmax(t_outputs, -1) == t_targets).sum().item()
-                n_total += len(t_outputs)
-
-                if t_targets_all is None:
-                    t_targets_all = t_targets
-                    t_outputs_all = t_outputs
+                if isinstance(self.dataset, GoEmotions):
+                    pred = torch.sigmoid(pred)
                 else:
-                    t_targets_all = torch.cat((t_targets_all, t_targets), dim=0)
-                    t_outputs_all = torch.cat((t_outputs_all, t_outputs), dim=0)
+                    pred = torch.softmax(pred, dim=-1)
+                pred = torch.where(pred > self.opt.threshold, 1, 0)
 
-        acc = n_correct / n_total
-        f1 = metrics.f1_score(t_targets_all.cpu(), torch.argmax(t_outputs_all, -1).cpu(), labels=[0, 1, 2], average='macro')
-        return acc, f1
+                total_loss += loss
+                global_step += 1
+
+                results = {"loss": total_loss / global_step}
+                results.update(utils.compute_metrics(pred, gt))
+        return results
 
     def run(self):
-        # Loss and Optimizer
-        criterion = nn.CrossEntropyLoss()
-        _params = filter(lambda p: p.requires_grad, self.model.parameters())
-        optimizer = self.opt.optimizer(_params, lr=self.opt.lr, weight_decay=self.opt.l2reg)
-
-        train_data_loader = DataLoader(dataset=self.trainset, batch_size=self.opt.batch_size, shuffle=True)
-        test_data_loader = DataLoader(dataset=self.testset, batch_size=self.opt.batch_size, shuffle=False)
-        val_data_loader = DataLoader(dataset=self.valset, batch_size=self.opt.batch_size, shuffle=False)
-
-        self._reset_params()
-        best_model_path = self._train(criterion, optimizer, train_data_loader, val_data_loader)
-        self.model.load_state_dict(torch.load(best_model_path))
-        test_acc, test_f1 = self._evaluate_acc_f1(test_data_loader)
-        logger.info('>> test_acc: {:.4f}, test_f1: {:.4f}'.format(test_acc, test_f1))
-
-
-def main():
-    # Hyper Parameters
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', default='bert_spc', type=str)
-    parser.add_argument('--dataset', default='laptop', type=str, help='twitter, restaurant, laptop')
-    parser.add_argument('--optimizer', default='adam', type=str)
-    parser.add_argument('--initializer', default='xavier_uniform_', type=str)
-    parser.add_argument('--lr', default=2e-5, type=float, help='try 5e-5, 2e-5 for BERT, 1e-3 for others')
-    parser.add_argument('--dropout', default=0.1, type=float)
-    parser.add_argument('--l2reg', default=0.01, type=float)
-    parser.add_argument('--num_epoch', default=20, type=int, help='try larger number for non-BERT models')
-    parser.add_argument('--batch_size', default=16, type=int, help='try 16, 32, 64 for BERT models')
-    parser.add_argument('--log_step', default=10, type=int)
-    parser.add_argument('--embed_dim', default=300, type=int)
-    parser.add_argument('--hidden_dim', default=300, type=int)
-    parser.add_argument('--bert_dim', default=768, type=int)
-    parser.add_argument('--pretrained_bert_name', default='bert-base-uncased', type=str)
-    parser.add_argument('--max_seq_len', default=85, type=int)
-    parser.add_argument('--polarities_dim', default=3, type=int)
-    parser.add_argument('--hops', default=3, type=int)
-    parser.add_argument('--patience', default=5, type=int)
-    parser.add_argument('--device', default=None, type=str, help='e.g. cuda:0')
-    parser.add_argument('--seed', default=1234, type=int, help='set seed for reproducibility')
-    parser.add_argument('--valset_ratio', default=0, type=float, help='set ratio between 0 and 1 for validation support')
-    # The following parameters are only valid for the lcf-bert model
-    parser.add_argument('--local_context_focus', default='cdm', type=str, help='local context focus mode, cdw or cdm')
-    parser.add_argument('--SRD', default=3, type=int, help='semantic-relative-distance, see the paper of LCF-BERT model')
-    opt = parser.parse_args()
-
-    if opt.seed is not None:
-        random.seed(opt.seed)
-        numpy.random.seed(opt.seed)
-        torch.manual_seed(opt.seed)
-        torch.cuda.manual_seed(opt.seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-        os.environ['PYTHONHASHSEED'] = str(opt.seed)
-
-    model_classes = utils.get_models()
-    dataset_files = {
-        'twitter': {
-            'train': './datasets/acl-14-short-data/train.raw',
-            'test': './datasets/acl-14-short-data/test.raw'
-        },
-        'restaurant': {
-            'train': './datasets/semeval14/Restaurants_Train.xml.seg',
-            'test': './datasets/semeval14/Restaurants_Test_Gold.xml.seg'
-        },
-        'laptop': {
-            'train': './datasets/semeval14/Laptops_Train.xml.seg',
-            'test': './datasets/semeval14/Laptops_Test_Gold.xml.seg'
-        }
-    }
-    input_colses = {
-        'lstm': ['text_indices'],
-        'td_lstm': ['left_with_aspect_indices', 'right_with_aspect_indices'],
-        'tc_lstm': ['left_with_aspect_indices', 'right_with_aspect_indices', 'aspect_indices'],
-        'atae_lstm': ['text_indices', 'aspect_indices'],
-        'ian': ['text_indices', 'aspect_indices'],
-        'memnet': ['context_indices', 'aspect_indices'],
-        'ram': ['text_indices', 'aspect_indices', 'left_indices'],
-        'cabasc': ['text_indices', 'aspect_indices', 'left_with_aspect_indices', 'right_with_aspect_indices'],
-        'tnet_lf': ['text_indices', 'aspect_indices', 'aspect_boundary'],
-        'aoa': ['text_indices', 'aspect_indices'],
-        'mgan': ['text_indices', 'aspect_indices', 'left_indices'],
-        'asgcn': ['text_indices', 'aspect_indices', 'left_indices', 'dependency_graph'],
-        'bert_spc': ['concat_bert_indices', 'concat_segments_indices'],
-        'aen_bert': ['text_bert_indices', 'aspect_bert_indices'],
-        'lcf_bert': ['concat_bert_indices', 'concat_segments_indices', 'text_bert_indices', 'aspect_bert_indices'],
-    }
-    initializers = utils.get_initializers()
-    optimizers = utils.get_optimizers()
-    opt.model_class = model_classes[opt.model_name]
-    opt.dataset_file = dataset_files[opt.dataset]
-    opt.inputs_cols = input_colses[opt.model_name]
-    opt.initializer = initializers[opt.initializer]
-    opt.optimizer = optimizers[opt.optimizer]
-    opt.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') \
-        if opt.device is None else torch.device(opt.device)
-
-    log_file = '{}-{}-{}.log'.format(opt.model_name, opt.dataset, strftime("%y%m%d-%H%M", localtime()))
-    logger.addHandler(logging.FileHandler(log_file))
-
-    ins = Instructor(opt)
-    ins.run()
+        best_path = self.train(self.train_loader, self.val_loader)
+        self.model.load_state_dict(torch.load(best_path))
+        results = self.evaluate(self.test_loader)
+        for key in sorted(results.keys()):
+            self.logger.info(f">  {key} = {results[key]:.4f}")
 
 
 if __name__ == '__main__':
-    main()
+    trainer = Trainer(config=None)
+    trainer.run()

@@ -6,22 +6,8 @@ import models
 
 def get_models():
     return {
-        'aoa': models.AOA,
-        'asgcn': models.ASGCN,
-        'bert_aen': models.BERT_AEN,
-        'bert_lcf': models.BERT_LCF,
-        'bert_spc': models.BERT_SPC,
         'bert': models.BERT,
-        'cabasc': models.Cabasc,
-        'ian': models.IAN,
-        'lstm_atae': models.LSTM_ATAE,
-        'lstm_tc': models.LSTM_TC,
-        'lstm_td': models.LSTM_TD,
         'lstm': models.LSTM,
-        'memnet': models.MemNet,
-        'mgan': models.MGAN,
-        'ram': models.RAM,
-        'tnet_lf': models.TNet_LF,
     }
 
 
@@ -44,6 +30,7 @@ def get_optimizers():
         'adadelta': optim.Adadelta,     # default lr=1.0
         'adagrad': optim.Adagrad,       # default lr=0.01
         'adam': optim.Adam,             # default lr=0.001
+        'adamW': optim.AdamW,
         'adamax': optim.Adamax,         # default lr=0.002
         'asgd': optim.ASGD,             # default lr=0.01
         'rmsprop': optim.RMSprop,       # default lr=0.01

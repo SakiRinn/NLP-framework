@@ -2,6 +2,7 @@ import glob
 import os
 from abc import ABCMeta, abstractmethod
 from typing import OrderedDict
+import torch
 
 from torch.utils.data import Dataset
 
@@ -41,3 +42,11 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
         tokenizer = utils.FullTokenizer('vocab.tmp')
         os.remove('vocab.tmp')
         return tokenizer
+
+    @staticmethod
+    def input_packets(batch):
+        packet = utils.generate_bert_inputs(batch)
+        if isinstance(batch, torch.Tensor):
+            packet = {k: torch.tensor(v) for k, v in packet.items()}
+        packet.update(input=batch)
+        return packet

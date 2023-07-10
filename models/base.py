@@ -8,7 +8,7 @@ class BaseModel(nn.Module, metaclass=ABCMeta):
         self.opt = opt
         self.loss = loss
 
-    def forward(self, input, gt=None):
+    def forward(self, input, gt=None, **kwargs):
         outputs = (None, ...)
         if gt is not None:
             loss = None

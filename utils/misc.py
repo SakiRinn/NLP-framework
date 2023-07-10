@@ -24,7 +24,7 @@ def set_logger(opt, name='run'):
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
     logging.basicConfig(format='[%(asctime)s | %(levelname)s | %(name)s]  %(message)s',
-                        datefmt='%m.%d.%Y-%H:%M:%S',
+                        datefmt='%Y.%m.%d-%H:%M:%S',
                         level=logging.INFO)
     dirname = f'{opt.model}_{opt.dataset}_{strftime("%m%d%H%M", localtime())}'
     os.makedirs(os.path.join('outputs', dirname), exist_ok=True)
@@ -32,19 +32,19 @@ def set_logger(opt, name='run'):
     return logger, dirname
 
 
-def compute_metrics(labels, preds):
-    assert len(preds) == len(labels)
+def compute_metrics(pred, gt):
+    assert len(pred) == len(gt)
     results = dict()
 
-    results["accuracy"] = accuracy_score(labels, preds)
+    results["accuracy"] = accuracy_score(gt, pred)
     results["macro_precision"], results["macro_recall"], results[
         "macro_f1"], _ = precision_recall_fscore_support(
-        labels, preds, average="macro")
+        gt, pred, average="macro")
     results["micro_precision"], results["micro_recall"], results[
         "micro_f1"], _ = precision_recall_fscore_support(
-        labels, preds, average="micro")
+        gt, pred, average="micro")
     results["weighted_precision"], results["weighted_recall"], results[
         "weighted_f1"], _ = precision_recall_fscore_support(
-        labels, preds, average="weighted")
+        gt, pred, average="weighted")
 
     return results

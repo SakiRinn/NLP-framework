@@ -61,8 +61,7 @@ class GoEmotions(BaseDataset):
     def get_labels(self, label_file):
         labels = []
         with open(os.path.join(self.data_dir, label_file), "r", encoding="utf-8") as f:
-            for line in f:
-                labels.append(line.strip())
+            labels.extend(line.strip() for line in f)
         return labels
 
     def load_tsv(self, filename):

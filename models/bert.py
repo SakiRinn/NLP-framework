@@ -1,4 +1,4 @@
-from torch import nn
+from torch import nn, sigmoid
 from .base import BaseModel
 from transformers import BertConfig, BertModel
 
@@ -13,20 +13,8 @@ class BERT(BaseModel):
         self.dropout = nn.Dropout(opt.dropout)
         self.dense = nn.Linear(opt.hidden_size, opt.num_labels)
 
-    def forward(self, input, gt=None, *,
-                attention_mask=None,
-                token_type_ids=None,
-                position_ids=None,
-                head_mask=None,
-                inputs_embeds=None):
-        outputs = self.bert(
-            input,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
-        )
+    def forward(self, input, gt=None, **kwargs):
+        outputs = self.bert(input, **kwargs)
         pooled_output = self.dropout(outputs[1])
         logit = self.dense(pooled_output)
 
@@ -36,5 +24,4 @@ class BERT(BaseModel):
         if gt is not None:
             loss = self.loss(logit, gt)
             outputs += (loss, )
-
         return outputs

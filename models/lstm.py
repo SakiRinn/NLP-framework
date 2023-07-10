@@ -15,7 +15,7 @@ class LSTM(BaseModel):
         self.lstm = DynamicLSTM(opt.embed_size, opt.hidden_size, num_layers=1, batch_first=True)
         self.dense = nn.Linear(opt.hidden_size, opt.num_labels)
 
-    def forward(self, input, gt=None):
+    def forward(self, input, gt=None, **kwargs):
         x = self.embed(input)
         x_len = torch.sum(input != 0, dim=-1)
         _, (h_n, _) = self.lstm(x, x_len)
