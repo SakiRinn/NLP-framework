@@ -191,6 +191,7 @@ class FullTokenizer(object):
 
     def __init__(self, vocab_file, do_lower_case=True):
         self.vocab = load_vocab(vocab_file)
+        self.vocab.update([('[UNK]', len(self.vocab))])         # ADD
         self.inv_vocab = {v: k for k, v in self.vocab.items()}
         self.basic_tokenizer = BasicTokenizer(
             do_lower_case=do_lower_case, vocab=self.vocab)
@@ -290,7 +291,7 @@ class BasicTokenizer(object):
         output = []
         for char in text:
             cp = ord(char)
-            if self._is_chinese_char(cp):
+            if self._is_chinese_char(cp) or self._is_emoji_char(cp):
                 output.append(" ")
                 output.append(char)
                 output.append(" ")
@@ -318,6 +319,24 @@ class BasicTokenizer(object):
                 (cp >= 0x2F800 and cp <= 0x2FA1F)):  #
             return True
 
+        return False
+
+    def _is_emoji_char(self, cp):
+        # ADD
+        emoji_ranges = [
+            (0x1F600, 0x1F64F),  # Emoticons
+            (0x1F300, 0x1F5FF),  # Miscellaneous Symbols and Pictographs
+            (0x1F680, 0x1F6FF),  # Transport and Map Symbols
+            (0x2600, 0x26FF),    # Miscellaneous Symbols
+            (0x2700, 0x27BF),    # Dingbats
+            (0xFE00, 0xFE0F),    # Variation Selectors
+            (0x1F900, 0x1F9FF),  # Supplemental Symbols and Pictographs
+            (0x1F1E0, 0x1F1FF)   # Flags (Emoji flag sequences)
+        ]
+
+        for emoji_range in emoji_ranges:
+            if emoji_range[0] <= cp <= emoji_range[1]:
+                return True
         return False
 
     def _clean_text(self, text):

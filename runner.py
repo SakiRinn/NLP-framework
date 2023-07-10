@@ -4,7 +4,6 @@ import os
 import torch
 import utils
 from transformers import BertModel
-from datasets.absa import ABSADataset
 
 
 class Runner:
@@ -82,20 +81,11 @@ class Runner:
                             help='set seed for reproducibility')
         parser.add_argument('--log-step', default=10, type=int)
 
-        # For non-bert models
-        parser.add_argument('--embed-dim', default=300, type=int)
-        parser.add_argument('--hidden-dim', default=300, type=int)
-        # For bert models
-        parser.add_argument('--bert-dim', default=768, type=int)
-        parser.add_argument('--pretrained-bert-name',
-                            default='bert-base-uncased', type=str)
-        parser.add_argument('--max-seq-len', default=85, type=int)
-
-        # model == bert_lcf
-        parser.add_argument('--local-context-focus', default='cdm',
-                            type=str, help='local context focus mode, cdw or cdm')
-        parser.add_argument('--SRD', default=3, type=int,
-                            help='semantic-relative-distance, see the paper of LCF-BERT model')
+        # Model
+        parser.add_argument('--embed-size', default=300, type=int)
+        parser.add_argument('--hidden-size', default=300, type=int)
+        parser.add_argument('--max-seq-len', default=50, type=int)
+        parser.add_argument('--pretrained-bert-name', default='bert-base-uncased', type=str)
 
         # dataset == Goemotions
         parser.add_argument("--taxonomy", default='original', choices=['original', 'ekman', 'group'],
@@ -161,7 +151,7 @@ class Runner:
                 if global_step % self.opt.log_step == 0:
                     train_acc = n_correct / n_total
                     train_loss = loss_total / n_total
-                    logger.info('loss: {:.4f}, acc: {:.4f}'.format(train_loss, train_acc))
+                    self.logger.info('loss: {:.4f}, acc: {:.4f}'.format(train_loss, train_acc))
 
             val_acc, val_f1 = self._evaluate_acc_f1(val_dataloader)
             self.logger.info('> val_acc: {:.4f}, val_f1: {:.4f}'.format(val_acc, val_f1))

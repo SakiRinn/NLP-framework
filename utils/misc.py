@@ -30,6 +30,7 @@ def set_logger(opt):
     log_file = f'{opt.model}_{opt.dataset}_{strftime("%m%d%H%M", localtime())}.log'
     logger.addHandler(logging.FileHandler(log_file))
 
+
 def compute_metrics(labels, preds):
     assert len(preds) == len(labels)
     results = dict()
