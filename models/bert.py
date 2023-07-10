@@ -1,4 +1,4 @@
-from torch import nn, sigmoid
+from torch import nn
 from .base import BaseModel
 from transformers import BertConfig, BertModel
 

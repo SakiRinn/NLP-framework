@@ -11,8 +11,8 @@ from .base import BaseDataset
 
 class GoEmotions(BaseDataset):
 
-    def __init__(self, data_dir, mode='all', max_seq_len=50):
-        super(GoEmotions, self).__init__(data_dir)
+    def __init__(self, data_dir, tokenizer=None, mode='all', max_seq_len=50):
+        super(GoEmotions, self).__init__(data_dir, tokenizer=tokenizer)
         self.labels = self.get_labels(data_dir)
         self.max_seq_len = max_seq_len
 

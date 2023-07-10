@@ -14,7 +14,10 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
 
     def __init__(self, data_dir, tokenizer=None):
         self.data_dir = data_dir
-        self.tokenizer = self.build_tokenizer(data_dir)
+        if tokenizer is None:
+            self.tokenizer = self.build_tokenizer(data_dir)
+        else:
+            self.tokenizer = tokenizer
         self.labels = None
 
     @abstractmethod

@@ -5,6 +5,7 @@ import math
 import os
 import re
 from time import localtime, strftime
+import numpy as np
 
 import torch
 from attrdict import AttrDict
@@ -17,7 +18,7 @@ import models
 import utils
 
 
-class Trainer:
+class Runner:
 
     def __init__(self, config=None):
         if config is not None:
@@ -56,8 +57,9 @@ class Trainer:
                             datefmt='%Y.%m.%d-%H:%M:%S',
                             level=logging.INFO)
         dirname = f'{self.opt.model}_{self.opt.dataset}_{strftime("%m%d%H%M", localtime())}'
-        os.makedirs(os.path.join('outputs', dirname), exist_ok=True)
-        logger.addHandler(logging.FileHandler(os.path.join('outputs', dirname, f'{name}.log')))
+        dirname = os.path.join('outputs', dirname)
+        os.makedirs(dirname, exist_ok=True)
+        logger.addHandler(logging.FileHandler(os.path.join(dirname, f'{name}.log')))
         return logger, dirname
 
     @staticmethod
@@ -103,7 +105,7 @@ class Trainer:
                             help='If using pretrained bert, it must be 768')
         parser.add_argument('--max-seq-len', default=50, type=int)
         parser.add_argument('--pretrained-model',
-                            default='pretrained/bert-base-uncased', type=str)
+                            default='pretrained/bert-base-cased', type=str)
         parser.add_argument('--pretrained-tokenizer',
                             default='pretrained/goemotions-tokenizer', type=str)
 
@@ -149,7 +151,7 @@ class Trainer:
                 self.tokenizer = BertTokenizer.from_pretrained(self.opt.pretrained_tokenizer)
             else:
                 self.tokenizer = self.opt.dataset.build_tokenizer(self.opt.data_dir)
-        dataset = self.opt.dataset(self.opt.data_dir, mode=mode)
+        dataset = self.opt.dataset(self.opt.data_dir, tokenizer=self.tokenizer, mode=mode)
         return DataLoader(dataset, batch_size=self.opt.batch_size, shuffle=(mode == 'train'))
 
     def prepare_model(self):
@@ -194,28 +196,21 @@ class Trainer:
             os.path.join(resume_dir, "scheduler.pt")))
 
     def save(self, info='save'):
-        torch.save(
-            self.model.state_dict(),
-            os.path.join(self.dirname, f'model_{info}.pt'),
-        )
-        torch.save(
-            self.optimizer.state_dict(),
-            os.path.join(self.dirname, f'optimizer.pt'),
-        )
-        torch.save(
-            self.scheduler.state_dict(),
-            os.path.join(self.dirname, f'scheduler.pt'),
-        )
-        self.logger.info(f'Save new checkpoints.')
+        torch.save(self.model.state_dict(),
+                   os.path.join(self.dirname, f'model_{info}.pt'))
+        torch.save(self.optimizer.state_dict(),
+                   os.path.join(self.dirname, 'optimizer.pt'))
+        torch.save(self.scheduler.state_dict(),
+                   os.path.join(self.dirname, 'scheduler.pt'))
+        self.logger.info('Save new checkpoints.')
 
     def train(self, train_loader, val_loader):
-        max_val_acc, max_val_f1 = 0, 0
-        max_val_epoch, global_step = 0, 0
+        max_val_acc, max_val_f1, max_val_epoch = 0, 0, 0
+        total_loss, global_step = 0, 0
         path = None
 
         for epoch in trange(self.opt.epoch, desc="Epoch"):
             self.logger.info(f'Epoch: {epoch}')
-            n_correct, n_total, loss_total = 0, 0, 0
             self.model.train()
 
             for batch, gt in tqdm(train_loader, desc="Iteration"):
@@ -227,29 +222,28 @@ class Trainer:
                 del inputs['input']
                 batch, gt = batch.to(self.opt.device), gt.to(self.opt.device)
                 outputs = self.model(batch, gt, **inputs)
-                loss = outputs[-1]
+                pred, loss = outputs[0], outputs[-1]
                 loss.backward()
 
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.opt.max_grad_norm)
                 self.optimizer.step()
                 self.scheduler.step()
 
-                n_correct += (torch.argmax(outputs, -1) == gt).sum().item()
-                n_total += len(outputs)
-                loss_total += loss.item() * len(outputs)
+                global_step += 1
+                total_loss += loss.item()
                 if global_step % self.opt.log_step == 0:
-                    train_acc = n_correct / n_total
-                    train_loss = loss_total / n_total
-                    self.logger.info(
-                        '>  loss: {:.4f}, acc: {:.4f}'.format(train_loss, train_acc))
+                    self.logger.info(f'>  step: {global_step}, cur_loss: {loss:.4f}, ' +
+                                     f'avg_loss: {total_loss / global_step:.4f}')
 
-            val_acc, val_f1 = self.evaluate(val_loader)
-            self.logger.info(
-                '>> val_acc: {:.4f}, val_f1: {:.4f}'.format(val_acc, val_f1))
+            results = self.evaluate(val_loader, result_filename=f'val_e{epoch+1}')
+            val_acc, val_f1 = results['accuracy'], results['micro_f1']
+            val_pr, val_rec = results['micro_precision'], results['micro_recall']
+            self.logger.info(f'>  val_acc: {val_acc*100:.2f}, val_f1: {val_f1*100:.2f}, ' +
+                             f'val_pr: {val_pr*100:.2f}, val_rec: {val_rec*100:.2f}')
             if val_acc > max_val_acc:
                 max_val_acc = val_acc
                 max_val_epoch = epoch
-                self.save(info=f'{epoch}e_{val_acc:.4f}acc')
+                self.save(info=f'{epoch+1}e_{val_acc*100:.2f}acc')
             if val_f1 > max_val_f1:
                 max_val_f1 = val_f1
             if epoch - max_val_epoch >= self.opt.patience:
@@ -258,41 +252,59 @@ class Trainer:
 
         return path
 
-    def evaluate(self, val_loader):
+    def evaluate(self, test_loader, result_filename=None):
+        if result_filename is not None:
+            result_lst = []
+            total_num = 0
         total_loss, global_step = 0, 0
         self.model.eval()
 
         self.logger.info('Evaluating...')
         with torch.no_grad():
-            for i, (batch, gt) in enumerate(val_loader):
+            for batch, gt in test_loader:
                 inputs = {k: v.to(self.opt.device) \
-                          for k, v in self.opt.dataset.input_packets(batch)}
+                              for k, v in self.opt.dataset.input_packets(batch).items()}
                 del inputs['input']
+                batch, gt = batch.to(self.opt.device), gt.to(self.opt.device)
                 outputs = self.model(batch, gt, **inputs)
-                pred = outputs[0]
-                loss = outputs[-1]
+                pred, loss = outputs[0], outputs[-1]
 
-                if isinstance(self.dataset, GoEmotions):
+                if self.opt.dataset == GoEmotions:
                     pred = torch.sigmoid(pred)
                 else:
                     pred = torch.softmax(pred, dim=-1)
-                pred = torch.where(pred > self.opt.threshold, 1, 0)
+                bi_pred = torch.where(pred > self.opt.threshold, 1, 0)
+
+                if result_filename is not None:
+                    label_lst = self.opt.dataset.get_labels(self.opt.data_dir)
+                    for i in range(len(batch)):
+                        total_num += 1
+                        result_lst.append({
+                            'number': total_num,
+                            'text': utils.array_to_text(self.tokenizer, batch[i]),
+                            'predictions': [label_lst[idx] for idx in np.nonzero(bi_pred[i])[0]],
+                            'scores': pred[i][np.nonzero(bi_pred[i])[0]].tolist(),
+                            'gts': [label_lst[idx] for idx in np.nonzero(gt[i])[0]]
+                        })
 
                 total_loss += loss
                 global_step += 1
-
                 results = {"loss": total_loss / global_step}
-                results.update(utils.compute_metrics(pred, gt))
+                results.update(utils.compute_metrics(bi_pred.cpu(), gt.cpu()))
+
+        if result_filename is not None:
+            with open(os.path.join(self.dirname, f'{result_filename}.json'), 'w') as f:
+                json.dump(result_lst, f, indent=4)
         return results
 
     def run(self):
         best_path = self.train(self.train_loader, self.val_loader)
         self.model.load_state_dict(torch.load(best_path))
-        results = self.evaluate(self.test_loader)
+        results = self.evaluate(self.test_loader, result_filename='test')
         for key in sorted(results.keys()):
             self.logger.info(f">  {key} = {results[key]:.4f}")
 
 
 if __name__ == '__main__':
-    trainer = Trainer(config=None)
+    trainer = Runner(config=None)
     trainer.run()
