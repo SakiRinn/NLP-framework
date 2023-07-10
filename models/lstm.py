@@ -6,14 +6,14 @@ from .layers.dynamic_rnn import DynamicLSTM
 
 
 class LSTM(BaseModel):
-    def __init__(self, opt, loss=nn.BCEWithLogitsLoss(), embedding=None):
+    def __init__(self, opt, embedding=None, loss=nn.BCEWithLogitsLoss()):
         super(LSTM, self).__init__(opt, loss)
         if embedding is not None:
             self.embed = nn.Embedding.from_pretrained(torch.tensor(embedding, dtype=torch.float))
         else:
-            self.embed = nn.Embedding(opt.vocab_len, opt.embed_dim)
-        self.lstm = DynamicLSTM(opt.embed_dim, opt.hidden_dim, num_layers=1, batch_first=True)
-        self.dense = nn.Linear(opt.hidden_dim, opt.polarities_dim)
+            self.embed = nn.Embedding(opt.vocab_len, opt.embed_size)
+        self.lstm = DynamicLSTM(opt.embed_size, opt.hidden_size, num_layers=1, batch_first=True)
+        self.dense = nn.Linear(opt.hidden_size, opt.num_labels)
 
     def forward(self, input, gt=None):
         x = self.embed(input)

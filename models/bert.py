@@ -4,7 +4,7 @@ from transformers import BertConfig, BertModel
 
 
 class BERT(BaseModel):
-    def __init__(self, opt, loss=nn.BCEWithLogitsLoss(), bert=None):
+    def __init__(self, opt, bert=None, loss=nn.BCEWithLogitsLoss()):
         super(BERT, self).__init__(opt, loss)
         if bert is not None:
             self.bert = bert

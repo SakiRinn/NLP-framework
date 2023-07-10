@@ -22,6 +22,8 @@ class GoEmotions(BaseDataset):
             dev_data, dev_gt = self.load_tsv('dev.tsv')
             self.data = np.concatenate([train_data, test_data, dev_data], axis=0)
             self.gt = np.concatenate([train_gt, test_gt, dev_gt], axis=0)
+        elif mode == 'val':
+            self.data, self.gt = self.load_tsv('dev.tsv')
         else:
             self.data, self.gt = self.load_tsv(mode + '.tsv')
 

@@ -1,1 +1,2 @@
-from models.lstm import LSTM
+from .lstm import LSTM
+from .bert import BERT
