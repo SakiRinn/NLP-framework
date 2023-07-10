@@ -1,15 +1,16 @@
 import argparse
 import json
+import logging
 import math
 import os
 import re
-from sklearn import metrics
+from time import localtime, strftime
 
 import torch
 from attrdict import AttrDict
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm, trange
-from transformers import BertModel, get_linear_schedule_with_warmup
+from transformers import BertModel, BertTokenizer, get_linear_schedule_with_warmup
 from datasets.goemotions import GoEmotions
 
 import models
@@ -25,7 +26,7 @@ class Trainer:
         else:
             self.opt = self.init_args()
 
-        self.logger, self.dirname = utils.set_logger(self.opt, 'train')
+        self.logger, self.dirname = self.init_logger('train')
         self.print_args()
         self.opt.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') \
             if self.opt.device is None else torch.device(self.opt.device)
@@ -46,7 +47,18 @@ class Trainer:
 
         if self.opt.device.type == 'cuda':
             self.logger.info(
-                f'Cuda memory allocated: {torch.cuda.memory_allocated(device=self.opt.device.index)}')
+                f'Cuda memory allocated: {torch.cuda.memory_allocated(device=self.opt.device.index) / 1024**3:.2f} GB')
+
+    def init_logger(self, name='print'):
+        logger = logging.getLogger()
+        logger.setLevel(logging.INFO)
+        logging.basicConfig(format='[%(asctime)s | %(levelname)s | %(name)s]  %(message)s',
+                            datefmt='%Y.%m.%d-%H:%M:%S',
+                            level=logging.INFO)
+        dirname = f'{self.opt.model}_{self.opt.dataset}_{strftime("%m%d%H%M", localtime())}'
+        os.makedirs(os.path.join('outputs', dirname), exist_ok=True)
+        logger.addHandler(logging.FileHandler(os.path.join('outputs', dirname, f'{name}.log')))
+        return logger, dirname
 
     @staticmethod
     def init_args():
@@ -68,7 +80,7 @@ class Trainer:
         # Train
         parser.add_argument('--epoch', default=10, type=int,
                             help='Try larger number for non-BERT models')
-        parser.add_argument('--batch-size', default=64,
+        parser.add_argument('--batch-size', default=32,
                             type=int, help='Try 16, 32, 64 for BERT models')
         parser.add_argument('--lr', default=5e-5, type=float,
                             help='try 5e-5, 2e-5 for BERT, 1e-3 for others')
@@ -90,8 +102,10 @@ class Trainer:
         parser.add_argument('--hidden-size', default=768, type=int,
                             help='If using pretrained bert, it must be 768')
         parser.add_argument('--max-seq-len', default=50, type=int)
-        parser.add_argument('--pretrained-bert-name',
-                            default='bert-base-uncased', type=str)
+        parser.add_argument('--pretrained-model',
+                            default='pretrained/bert-base-uncased', type=str)
+        parser.add_argument('--pretrained-tokenizer',
+                            default='pretrained/goemotions-tokenizer', type=str)
 
         # dataset == Goemotions
         parser.add_argument("--taxonomy", default='original', choices=['original', 'ekman', 'group'],
@@ -130,18 +144,22 @@ class Trainer:
     def prepare_loader(self, mode='all'):
         if isinstance(self.opt.dataset, str):
             self.opt.dataset = utils.get_datasets()[self.opt.dataset]
-            self.dataset = self.opt.dataset(self.opt.data_dir, mode='all')
+            self.labels = self.opt.dataset.get_labels(self.opt.data_dir)
+            if self.opt.pretrained_tokenizer != '':
+                self.tokenizer = BertTokenizer.from_pretrained(self.opt.pretrained_tokenizer)
+            else:
+                self.tokenizer = self.opt.dataset.build_tokenizer(self.opt.data_dir)
         dataset = self.opt.dataset(self.opt.data_dir, mode=mode)
         return DataLoader(dataset, batch_size=self.opt.batch_size, shuffle=(mode == 'train'))
 
     def prepare_model(self):
-        self.opt.vocab_len = len(self.dataset.tokenizer.vocab)
-        self.opt.num_labels = len(self.dataset.labels)
+        self.opt.vocab_len = len(self.tokenizer)
+        self.opt.num_labels = len(self.labels)
         self.opt.model = utils.get_models()[self.opt.model]
         pretrain = None
-        if isinstance(self.opt.model, models.BERT):
-            pretrain = BertModel.from_pretrained(self.opt.pretrained_bert_name)
-        elif isinstance(self.opt.model, models.LSTM):
+        if self.opt.model == models.BERT:
+            pretrain = BertModel.from_pretrained(self.opt.pretrained_model)
+        elif self.opt.model == models.LSTM:
             pretrain = None     # TODO
         return self.opt.model(self.opt, pretrain).to(self.opt.device)
 

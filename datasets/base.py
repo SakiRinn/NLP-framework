@@ -5,15 +5,16 @@ from typing import OrderedDict
 import torch
 
 from torch.utils.data import Dataset
+from transformers import BertTokenizer
 
 import utils
 
 
 class BaseDataset(Dataset, metaclass=ABCMeta):
 
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, tokenizer=None):
         self.data_dir = data_dir
-        self.tokenizer = self.build_tokenizer()
+        self.tokenizer = self.build_tokenizer(data_dir)
         self.labels = None
 
     @abstractmethod
@@ -24,9 +25,10 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
     def __getitem__(self, index):
         pass
 
-    def build_tokenizer(self):
+    @staticmethod
+    def build_tokenizer(data_dir):
         text = ''
-        for file in glob.glob(self.data_dir):
+        for file in glob.glob(data_dir):
             raise NotImplementedError
 
         excluded_symbols = "#…!\"$%&'()*+,-—–./:;<=>?@[\\]^_`{|}~‘’“”„•ˈ "
@@ -42,6 +44,10 @@ class BaseDataset(Dataset, metaclass=ABCMeta):
         tokenizer = utils.FullTokenizer('vocab.tmp')
         os.remove('vocab.tmp')
         return tokenizer
+
+    @staticmethod
+    def get_labels():
+        pass
 
     @staticmethod
     def input_packets(batch):

@@ -20,18 +20,6 @@ def set_seed(seed):
     os.environ['PYTHONHASHSEED'] = str(seed)
 
 
-def set_logger(opt, name='run'):
-    logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
-    logging.basicConfig(format='[%(asctime)s | %(levelname)s | %(name)s]  %(message)s',
-                        datefmt='%Y.%m.%d-%H:%M:%S',
-                        level=logging.INFO)
-    dirname = f'{opt.model}_{opt.dataset}_{strftime("%m%d%H%M", localtime())}'
-    os.makedirs(os.path.join('outputs', dirname), exist_ok=True)
-    logger.addHandler(logging.FileHandler(name + '.log'))
-    return logger, dirname
-
-
 def compute_metrics(pred, gt):
     assert len(pred) == len(gt)
     results = dict()

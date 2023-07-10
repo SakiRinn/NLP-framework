@@ -11,9 +11,9 @@ from .base import BaseDataset
 
 class GoEmotions(BaseDataset):
 
-    def __init__(self, data_dir, label_file='labels.txt', mode='all', max_seq_len=50):
+    def __init__(self, data_dir, mode='all', max_seq_len=50):
         super(GoEmotions, self).__init__(data_dir)
-        self.labels = self.get_labels(label_file)
+        self.labels = self.get_labels(data_dir)
         self.max_seq_len = max_seq_len
 
         if mode == 'all':
@@ -33,9 +33,10 @@ class GoEmotions(BaseDataset):
     def __getitem__(self, index):
         return self.data[index], self.gt[index]
 
-    def build_tokenizer(self):
+    @staticmethod
+    def build_tokenizer(data_dir):
         text = ''
-        for tsv in glob.glob(os.path.join(self.data_dir, '*.tsv')):
+        for tsv in glob.glob(os.path.join(data_dir, '*.tsv')):
             sentences = pd.read_csv(tsv, delimiter='\t').values[:, 0]
             for sentence in sentences:
                 text += sentence + ' '
@@ -58,9 +59,10 @@ class GoEmotions(BaseDataset):
         os.remove('vocab.tmp')
         return tokenizer
 
-    def get_labels(self, label_file):
+    @staticmethod
+    def get_labels(data_dir, label_file='labels.txt'):
         labels = []
-        with open(os.path.join(self.data_dir, label_file), "r", encoding="utf-8") as f:
+        with open(os.path.join(data_dir, label_file), "r", encoding="utf-8") as f:
             labels.extend(line.strip() for line in f)
         return labels
 
