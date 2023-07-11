@@ -12,7 +12,7 @@ class LSTM(BaseModel):
             self.embed = nn.Embedding.from_pretrained(torch.tensor(embedding, dtype=torch.float))
         else:
             self.embed = nn.Embedding(opt.vocab_len, opt.embed_size)
-        self.lstm = DynamicLSTM(opt.embed_size, opt.hidden_size, num_layers=1, batch_first=True)
+        self.lstm = DynamicLSTM(opt.embed_size, opt.hidden_size, num_layers=1, bidirectional=True, batch_first=True)
         self.dense = nn.Linear(opt.hidden_size, opt.num_labels)
 
     def forward(self, input, gt=None, **kwargs):

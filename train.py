@@ -9,6 +9,7 @@ import numpy as np
 
 import torch
 from attrdict import AttrDict
+from torch.optim import lr_scheduler
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from tqdm import tqdm, trange
 from transformers import BertModel, BertTokenizer, get_linear_schedule_with_warmup
@@ -91,8 +92,9 @@ class Runner:
                             type=int, help='Try 16, 32, 64 for BERT models')
         parser.add_argument('--lr', default=5e-5, type=float,
                             help='try 5e-5, 2e-5 for BERT, 1e-3 for others')
+        parser.add_argument('--lr-decay', default=0.0, type=float)
         parser.add_argument('--dropout', default=0.1, type=float)
-        parser.add_argument('--l2-reg', default=0.0, type=float)
+        parser.add_argument('--l2-reg', default=0.01, type=float)
         parser.add_argument('--max-grad-norm', default=1.0, type=float)
         parser.add_argument('--warmup-proportion', default=0.1, type=float)
 
@@ -102,7 +104,6 @@ class Runner:
         parser.add_argument('--seed', default=114514, type=int,
                             help='set seed for reproducibility')
         parser.add_argument('--log-step', default=25, type=int)
-        parser.add_argument('--patience', default=5, type=int)
 
         # Model
         parser.add_argument('--embed-size', default=256, type=int)
@@ -170,11 +171,19 @@ class Runner:
         self.opt.vocab_len = len(self.tokenizer.vocab) + 1
         self.opt.num_labels = len(self.labels)
         self.opt.model = utils.get_models()[self.opt.model]
+
         pretrain = None
-        if self.opt.model == models.BERT:
-            pretrain = BertModel.from_pretrained(self.opt.pretrained_model)
-        elif self.opt.model == models.LSTM:
-            pretrain = None     # TODO
+        if self.opt.pretrained_model != '':
+            if self.opt.model == models.BERT:
+                pretrain = BertModel.from_pretrained(
+                    self.opt.pretrained_model,
+                    num_labels=self.opt.num_labels,
+                    finetuning_task=self.opt.dataset.__class__.__name__,
+                    id2label={str(i): label for i, label in enumerate(self.labels)},
+                    label2id={label: i for i, label in enumerate(self.labels)}
+                )
+            elif self.opt.model == models.LSTM:
+                pretrain = None     # TODO
         return self.opt.model(self.opt, pretrain).to(self.opt.device)
 
     def prepare_optimizer(self):
@@ -183,11 +192,15 @@ class Runner:
         self.opt.optimizer = utils.get_optimizers()[self.opt.optimizer]
         optimizer = self.opt.optimizer(
             _params, lr=self.opt.lr, weight_decay=self.opt.l2_reg)
-        scheduler = get_linear_schedule_with_warmup(
-            optimizer,
-            num_warmup_steps=int(
-                self.opt.step * self.opt.warmup_proportion),
-            num_training_steps=self.opt.step)
+
+        def lr_lambda(current_step):
+            warmup_steps=int(self.opt.step * self.opt.warmup_proportion)
+            if current_step < warmup_steps:
+                return float(current_step) / float(max(1, warmup_steps))
+            else:
+                epoch = (current_step - warmup_steps) // len(self.train_loader)
+                return 1. / (1. + self.opt.lr_decay*epoch)
+        scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
         return optimizer, scheduler
 
     def load(self, resume_dir):
@@ -249,8 +262,8 @@ class Runner:
                 global_step += 1
                 total_loss += loss.item()
                 if global_step % self.opt.log_step == 0:
-                    self.logger.info(f'>  step: {global_step}, cur_loss: {loss:.4f}, ' +
-                                     f'avg_loss: {total_loss / global_step:.4f}')
+                    self.logger.info(f'>  step: {global_step}, lr: {self.optimizer.param_groups[0]["lr"]:.4f}, ' +
+                                     f'cur_loss: {loss:.4f}, avg_loss: {total_loss / global_step:.4f}')
 
             results = self.evaluate(val_loader, result_filename=f'val_e{epoch+1}')
             val_acc, val_f1 = results['accuracy'], results['micro_f1']
@@ -264,9 +277,6 @@ class Runner:
                 path = os.path.join(self.dirname, f'model_{epoch+1}e_{val_acc*100:.2f}acc.pt')
             if val_f1 > max_val_f1:
                 max_val_f1 = val_f1
-            if epoch - max_val_epoch >= self.opt.patience:
-                self.logger.info('Early stop!')
-                break
 
         return path
 
@@ -342,5 +352,5 @@ class Runner:
 
 
 if __name__ == '__main__':
-    trainer = Runner(config='configs/lstm.json')
+    trainer = Runner(config='configs/bert_original.json')
     trainer.run()
