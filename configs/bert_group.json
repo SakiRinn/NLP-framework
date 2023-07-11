@@ -19,7 +19,7 @@
     "hidden_size": 768,
     "max_seq_len": 50,
     "pretrained_model": "bert-base-cased",
-    "pretrained_tokenizer": "bert-base-cased-goemotions-group",
+    "pretrained_tokenizer": "monologg/bert-base-cased-goemotions-group",
     "taxonomy": "group",
     "threshold": 0.3,
     "device": null,

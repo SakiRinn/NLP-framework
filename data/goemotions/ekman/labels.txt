@@ -1,4 +1,7 @@
-ambiguous
-negative
+anger
+disgust
+fear
+joy
 neutral
-positive
+sadness
+surprise
